@@ -150,6 +150,7 @@ The following environment variables are also passed to the command when checking
 
 | Key                  | Description                                                                                                                                                                                                                           |
 |----------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `API`                | `true` if invoked by API endpoints                                                                                                                                                                                                    |
 | `BASE_BRANCH_NAME`   | Name of the base branch of the pull request (the branch that the pull request is getting merged into)                                                                                                                                 |
 | `COMMENT_ARGS`       | Any additional flags passed in the comment on the pull request. Flags are separated by commas and every character is escaped, ex. `atlantis plan -- arg1 arg2` will result in `COMMENT_ARGS=\a\r\g\1,\a\r\g\2`.                       |
 | `HEAD_REPO_NAME`     | Name of the repository that is getting merged into the base repository, ex. `atlantis`.                                                                                                                                               |
@@ -161,7 +162,6 @@ The following environment variables are also passed to the command when checking
 | `PULL_AUTHOR`        | Username of the pull request author, ex. `acme-user`.                                                                                                                                                                                 |
 | `REPO_ROOT`          | The absolute path to the root of the cloned repository.                                                                                                                                                                               |
 | `REPO_REL_PATH`      | Path to the project relative to `REPO_ROOT`                                                                                                                                                                                           |
-| `API`                | `true` if invoked by API endpoints                                                                                                                                                                                                    |
 | `VERBOSE`            | `true` when the user would like verbose output                                                                                                                                                                                        |
 
 ### External Command Result Handling
