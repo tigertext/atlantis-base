@@ -2,7 +2,7 @@
 
 **What it does:** Self-hosted Go application that listens for Terraform PR webhooks, runs `terraform plan/apply`, and comments results back to PRs.
 
-**Stack:** Go 1.25.8 • 381 Go files • Gorilla Mux • Cobra CLI • Viper config • VitePress docs (Node.js) • Docker deployment
+**Stack:** Go 1.26.5 • 440 Go files • Gorilla Mux • Cobra CLI • Viper config • VitePress docs (Node.js) • Docker deployment
 
 **Key Info:** ~35MB repo, server + CLI app, E2E tests with Playwright, integration tests with Terraform
 
@@ -10,7 +10,7 @@
 
 ## Build & Test (Always from repo root)
 
-**Prerequisites:** Go 1.25.8 (from go.mod) • Node 20+ & npm 10+ (website) • Docker • Terraform 1.11.1+ (integration tests)
+**Prerequisites:** Go 1.26.5 (from go.mod) • Node 20+ & npm 10+ (website) • Docker • Terraform 1.11.1+ (integration tests)
 
 **Build:** `make build-service` → creates `./atlantis` binary (~51MB, 30-60s first run, 10s subsequent). Clean: `make clean`
 
@@ -33,6 +33,7 @@
 **Key paths:** `main.go` (entry) • `cmd/server.go` • `server/server.go` (init) • `server/router.go` • `server/controllers/events/events_controller.go` (webhooks)
 
 **Core logic:** `server/core/config/` (parsing), `server/core/runtime/` (Terraform execution), `server/core/terraform/tfclient/` (TF client)
+**Localization:** `server/i18n/` (embedded YAML catalogs and runtime overrides), `server/events/templates/i18n/<lang>/` (localized markdown template overrides)
 
 **VCS providers:** `server/events/vcs/{github,gitlab,bitbucketcloud,bitbucketserver,azuredevops,gitea}/`
 
@@ -59,13 +60,18 @@
 
 **VCS provider:** Create `server/events/vcs/<provider>/` → Implement `Client` interface (`server/events/vcs/common/common.go`) → Update `server/server.go`
 
+**VCS pagination:** When following provider-returned pagination links, validate the next URL against the configured provider API origin before issuing the request. Bitbucket Cloud diffstat pagination uses this guard in both modified-file and mergeability checks.
+
 **Config changes:** Edit `server/core/config/valid/` or `raw/` → Update `server/user_config.go` → Test in `server/core/config/*_test.go`
+**i18n changes:** Keep command routing/template selection keyed on stable command identifiers (`command.Name`), and use localized titles only for display text.
 
 **Terraform execution:** Modify `server/core/terraform/tfclient/terraform_client.go` or `server/core/runtime/*_step_runner.go` (uses `hashicorp/hc-install`)
 
 **Combined VCS statuses:** `server/events/commit_status_updater.go` uses `models.ProjectCounts`. For failed apply/policy status text, count actual errored projects with `Errored`, not `Total - Success`, because planned or untouched projects may still be pending. For apply status text, `NoChanges` is a subset of `Success` and should be reported as up to date, not applied.
 
 **VCS status contexts:** Always pass generated commit status contexts through `truncateContext` before calling `UpdateStatus`. GitHub rejects contexts longer than 255 characters, and project names or workflow hook descriptions can exceed that limit.
+
+**GitHub team allowlist:** `GH_TEAM_ALLOWLIST` honors GitHub child-team membership. Keep hierarchy expansion available to both initial command authorization and later project filtering such as generated `policy_check` contexts.
 
 **Apply requirements:** API apply requests must populate `command.Context.PullRequestStatus` before evaluating apply requirements, and refresh it after the API plan phase. If pull status cannot be fetched, keep the fail-closed behavior for `approved` and `mergeable`.
 
@@ -117,4 +123,4 @@
 
 ---
 
-**Trust these instructions first.** Search codebase only if info is incomplete/incorrect. Validated 2026-04-20 • Go 1.25.8
+**Trust these instructions first.** Search codebase only if info is incomplete/incorrect. Validated 2026-07-16 • Go 1.26.5
