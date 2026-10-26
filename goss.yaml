@@ -19,12 +19,10 @@ command:
     stdout: []
     stderr: []
 
-  # ensure git-lfs is available
-  git-lfs-available:
+  # ensure git-lfs is NOT on PATH (removed in this fork)
+  git-lfs-absent:
     exec: "git-lfs -v"
-    exit-status: 0
-    stdout: []
-    stderr: []
+    exit-status: 127
 
   # ensure terraform is NOT on PATH (127 is "command not found" from sh)
   terraform-absent:

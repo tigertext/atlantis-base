@@ -7,6 +7,10 @@ ARG GOLANG_TAG=1.27.3-alpine3.24@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947
 
 # renovate: datasource=github-releases depName=open-policy-agent/conftest
 ARG DEFAULT_CONFTEST_VERSION=0.70.1
+# Commit that tag v${DEFAULT_CONFTEST_VERSION} must resolve to (the conftest-builder
+# stage fails closed on a mismatch). Update together with the version:
+#   git ls-remote https://github.com/open-policy-agent/conftest refs/tags/v<version>
+ARG DEFAULT_CONFTEST_COMMIT=0b42cb5cd1aa1dc1c9025a5e83c7e963166d08c0
 
 # Stage 1: build artifact and download deps
 
@@ -46,6 +50,50 @@ COPY . /app
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags "-s -w -X 'main.version=${ATLANTIS_VERSION}' -X 'main.commit=${ATLANTIS_COMMIT}' -X 'main.date=${ATLANTIS_DATE}'" -v -o atlantis .
+
+# Fork-only: build conftest from source instead of downloading the release
+# binary. The upstream release binaries are built with a Go toolchain and
+# golang.org/x/net that carry fixable High CVEs (Go stdlib CVE-2026-78667,
+# CVE-2026-78669, CVE-2026-97031; x/net CVE-2026-78669), and no fixed upstream
+# release exists yet. This stage compiles the same tag with the builder's Go
+# toolchain and bumps only x/net. Revert to the release-tarball download (with
+# checksums.txt verification) once upstream ships a fixed conftest.
+FROM --platform=$BUILDPLATFORM golang:${GOLANG_TAG} AS conftest-builder
+
+# These are automatically populated by Docker
+ARG TARGETOS
+ARG TARGETARCH
+
+ARG DEFAULT_CONFTEST_VERSION
+ARG DEFAULT_CONFTEST_COMMIT
+
+# renovate: datasource=apk depName=git
+ENV CONFTEST_BUILDER_GIT_VERSION="2.54.0-r0"
+
+SHELL ["/bin/sh", "-o", "errexit", "-o", "nounset", "-c"]
+RUN apk add --no-cache git=${CONFTEST_BUILDER_GIT_VERSION}
+
+# Never let Go fetch a different toolchain than the pinned golang image's.
+ENV GOTOOLCHAIN=local
+
+WORKDIR /src
+# Fetch the tag, then verify the commit it resolves to (fails closed).
+RUN git clone --quiet --depth 1 --branch "v${DEFAULT_CONFTEST_VERSION}" \
+        https://github.com/open-policy-agent/conftest . && \
+    test "$(git rev-parse HEAD)" = "${DEFAULT_CONFTEST_COMMIT}"
+
+# Bump only the modules below their fixed versions. x/crypto and x/text in
+# conftest 0.70.1 are already at v0.56.0 / v0.41.0, which are fixed.
+# The version ldflags match conftest's .goreleaser.yml.
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go get golang.org/x/net@v0.60.0 && \
+    go mod tidy && \
+    mkdir -p "/usr/local/bin/cft/versions/${DEFAULT_CONFTEST_VERSION}" && \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
+        -ldflags "-s -w -X github.com/open-policy-agent/conftest/internal/version.Version=${DEFAULT_CONFTEST_VERSION}" \
+        -o "/usr/local/bin/cft/versions/${DEFAULT_CONFTEST_VERSION}/conftest" ./main.go && \
+    ln -s "/usr/local/bin/cft/versions/${DEFAULT_CONFTEST_VERSION}/conftest" /usr/local/bin/conftest
 
 FROM debian:${DEBIAN_TAG} AS debian-base
 
@@ -89,53 +137,6 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-FROM debian-base AS deps
-
-# Get the architecture the image is being built for
-ARG TARGETPLATFORM
-WORKDIR /tmp/build
-
-# install conftest
-ARG DEFAULT_CONFTEST_VERSION
-ENV DEFAULT_CONFTEST_VERSION=${DEFAULT_CONFTEST_VERSION}
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN AVAILABLE_CONFTEST_VERSIONS=${DEFAULT_CONFTEST_VERSION} && \
-    case ${TARGETPLATFORM} in \
-        "linux/amd64") CONFTEST_ARCH=x86_64 ;; \
-        "linux/arm64") CONFTEST_ARCH=arm64 ;; \
-        # There is currently no compiled version of conftest for armv7
-        "linux/arm/v7") CONFTEST_ARCH=x86_64 ;; \
-    esac && \
-    for VERSION in ${AVAILABLE_CONFTEST_VERSIONS}; do \
-        curl -LOs "https://github.com/open-policy-agent/conftest/releases/download/v${VERSION}/conftest_${VERSION}_Linux_${CONFTEST_ARCH}.tar.gz" && \
-        curl -LOs "https://github.com/open-policy-agent/conftest/releases/download/v${VERSION}/checksums.txt" && \
-        sed -n "/conftest_${VERSION}_Linux_${CONFTEST_ARCH}.tar.gz/p" checksums.txt | sha256sum -c && \
-        mkdir -p "/usr/local/bin/cft/versions/${VERSION}" && \
-        tar -C "/usr/local/bin/cft/versions/${VERSION}" -xzf "conftest_${VERSION}_Linux_${CONFTEST_ARCH}.tar.gz" && \
-        ln -s "/usr/local/bin/cft/versions/${VERSION}/conftest" /usr/local/bin/conftest && \
-        rm "conftest_${VERSION}_Linux_${CONFTEST_ARCH}.tar.gz" && \
-        rm checksums.txt; \
-    done
-
-# install git-lfs
-# renovate: datasource=github-releases depName=git-lfs/git-lfs
-ENV GIT_LFS_VERSION=3.8.0
-
-# Keep these hashes in sync with GIT_LFS_VERSION; mismatches fail closed.
-# SHA256 hashes are published in the release's signed sha256sums.asc file.
-RUN case ${TARGETPLATFORM} in \
-        "linux/amd64") GIT_LFS_ARCH=amd64; GIT_LFS_SHA256=e455e00f15d9b95661b8d53498ffb0c3367962cf1ec73c31ab7369516cd6ab8d ;; \
-        "linux/arm64") GIT_LFS_ARCH=arm64; GIT_LFS_SHA256=ac9c8efac980bb0505ead384d087e2acb6486fd8498691a2165fa174ec6118c2 ;; \
-        "linux/arm/v7") GIT_LFS_ARCH=arm; GIT_LFS_SHA256=67144f93c2342f46456d22dbf33077f54e0581cb91f2966393151871ca328553 ;; \
-        *) echo "unsupported target platform: ${TARGETPLATFORM}" >&2; exit 1 ;; \
-    esac && \
-    curl -L -s --output git-lfs.tar.gz "https://github.com/git-lfs/git-lfs/releases/download/v${GIT_LFS_VERSION}/git-lfs-linux-${GIT_LFS_ARCH}-v${GIT_LFS_VERSION}.tar.gz" && \
-    echo "${GIT_LFS_SHA256}  git-lfs.tar.gz" | sha256sum -c - && \
-    tar --strip-components=1 -xf git-lfs.tar.gz && \
-    chmod +x git-lfs && \
-    mv git-lfs /usr/bin/git-lfs && \
-    git-lfs --version
-
 # Stage 2 - Alpine
 # Creating the individual distro builds using targets.
 #
@@ -168,8 +169,7 @@ RUN addgroup --gid 1000 atlantis && \
 # copy atlantis binary
 COPY --from=builder /app/atlantis /usr/local/bin/atlantis
 # copy dependencies
-COPY --from=deps /usr/local/bin/conftest /usr/local/bin/conftest
-COPY --from=deps /usr/bin/git-lfs /usr/bin/git-lfs
+COPY --from=conftest-builder /usr/local/bin/conftest /usr/local/bin/conftest
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 # renovate: datasource=apk depName=ca-certificates
@@ -250,8 +250,7 @@ HEALTHCHECK --interval=5m --timeout=3s \
 # copy atlantis binary
 COPY --from=builder /app/atlantis /usr/local/bin/atlantis
 # copy dependencies
-COPY --from=deps /usr/local/bin/conftest /usr/local/bin/conftest
-COPY --from=deps /usr/bin/git-lfs /usr/bin/git-lfs
+COPY --from=conftest-builder /usr/local/bin/conftest /usr/local/bin/conftest
 # copy docker-entrypoint.sh
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
